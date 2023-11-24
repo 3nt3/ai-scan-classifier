@@ -1,10 +1,8 @@
-# AI-Scan-Classifier
-
-![AI-Scan-Classifier Logo](https://your-image-url.com/logo.png)
+# ai-scan-classifier
 
 ## Overview
 
-AI-Scan-Classifier is a Go project for classifying PDF documents using OCR. It integrates with `ocrmypdf` for text extraction and leverages ChatGPT for document classification.
+ai-scan-classifier is a Go project for classifying PDF documents using OCR. It integrates with `ocrmypdf` for text extraction and leverages ChatGPT for document classification.
 
 ## Features
 
@@ -18,22 +16,22 @@ AI-Scan-Classifier is a Go project for classifying PDF documents using OCR. It i
 2. Clone the repo and build:
 
    ```bash
-   git clone https://github.com/3nt3/AI-Scan-Classifier.git
-   cd AI-Scan-Classifier
+   git clone https://github.com/3nt3/ai-scan-classifier.git
+   cd ai-scan-classifier
    go build
    ```
 
 3. Run the classifier:
 
    ```bash
-   OPENAI_KEY=your_chatgpt_api_key ./AI-Scan-Classifier input.pdf
+   OPENAI_KEY=your_chatgpt_api_key ./ai-scan-classifier input.pdf
    ```
 
    Replace `input.pdf` with the path to your input PDF.
 
 ## Configuration
 
-Configure AI-Scan-Classifier using environment variables or a `.env` file.
+Configure ai-scan-classifier using environment variables or a `.env` file.
 
 ```env
 OPENAI_KEY=your_chatgpt_api_key
