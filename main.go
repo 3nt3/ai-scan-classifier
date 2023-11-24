@@ -28,7 +28,7 @@ func main() {
 
 
 	// run ocrmypdf command on the first argument
-	output, err := exec.Command("ocrmypdf", os.Args[1], "-l", "deu", "/tmp/output.pdf", "--sidecar", ).CombinedOutput()
+	output, err := exec.Command("ocrmypdf", os.Args[1], "--redo-ocr", "-l", "deu", "/tmp/output.pdf", "--sidecar").CombinedOutput()
 	if err != nil {
 		fmt.Printf("Error running ocrmypdf: %v\n%v\n", err, string(output))
 		return
@@ -41,14 +41,25 @@ func main() {
 		return
 	}
 
+    // only include the first 2000 characters
+    ocr = ocr[:min(2000, len(ocr))]
+
+    // chop up ocr into chunks of 2000 characters and convert to ChatCompletionMessage:
+    var messages []openai.ChatCompletionMessage
+    for i := 0; i < len(ocr); i += 2000 {
+        messages = append(messages, openai.ChatCompletionMessage{
+            Role:    openai.ChatMessageRoleUser,
+            Content: string(ocr[i:min(i+2000, len(ocr))]),
+        })
+    }
+
 
 	openaiKey := os.Getenv("OPENAI_KEY")
 
 	prompt := `
 	You will be provided with a the OCR version of a scanned document, and your
-	task is to classify its content as one of the following categories. You may
-	only respond with one word.
-
+	task is to classify its content as one of the following categories. You may only
+    respond with one word
 
 	- bizfactory: A document that is related to my work at Biz Factory GmbH
 	- ids: A scan of an ID card, passport, or similar

@@ -1,5 +1,7 @@
 # ai-scan-classifier
 
+![the image](/image.jpg)
+
 ## Overview
 
 ai-scan-classifier is a Go project for classifying PDF documents using OCR. It integrates with `ocrmypdf` for text extraction and leverages ChatGPT for document classification.
