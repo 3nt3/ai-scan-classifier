@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
-	// "regexp"
 	"time"
 
 	"github.com/jlaffaye/ftp"
@@ -17,6 +17,7 @@ import (
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 	"github.com/urfave/cli/v2"
+    "bytes"
 
 	dotenv "github.com/joho/godotenv"
 	openai "github.com/sashabaranov/go-openai"
@@ -44,17 +45,6 @@ func main() {
 				Name:  "log-style",
 				Usage: "The log style to use",
 				Value: "plain",
-				Action: func(c *cli.Context, s string) error {
-					switch c.String("log-style") {
-					case "json":
-						slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel})))
-					case "plain":
-						slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
-					default:
-						slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
-					}
-					return nil
-				},
 			},
 			&cli.StringFlag{
 				Name:  "log-level",
@@ -98,7 +88,15 @@ func main() {
 			}
 			programLevel.Set(level)
 
-			slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
+            // set log log-style
+            switch c.String("log-style") {
+            case "json":
+                slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel})))
+            case "plain":
+                slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
+            default:
+                slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
+            }
 
 			slog.Debug("Log level", "level", programLevel.String())
 
@@ -133,6 +131,7 @@ type Classification struct {
 	Title       string `json:"title"`
 	Category    string `json:"category"`
 	Explanation string `json:"explanation"`
+    FileName    string `json:"filename"`
 }
 
 func classifyFile(file string) (Classification, error) {
@@ -176,10 +175,10 @@ func classifyFile(file string) (Classification, error) {
 
 	prompt := `
 	You will be provided with a the OCR version of a scanned document, and your
-	task is to classify its content as one of the following categories. Give an explanation, a title and a category in JSON format.
+	task is to classify its content as one of the following categories. Give an explanation, a title, a filename, and a category in JSON format.
 
     An example response would be:
-    {"category": "ids", "explanation": "This is a scan of a German ID card (Personalausweis) for Max Mustermann.", title: "Perso Max"}
+    {"category": "ids", "explanation": "This is a scan of a German ID card (Personalausweis) for Max Mustermann.", title: "Perso Max", "filename": "perso_max.pdf"}
 
 	- bizfactory: A document that is related to my work at Biz Factory GmbH
 	- ids: A scan of an ID card, passport, or similar card
@@ -193,10 +192,11 @@ func classifyFile(file string) (Classification, error) {
 	- th-koeln: A document that is related to my studies at Technische Hochschule Köln
 	- tk: A document that is related to my health insurance at TK (Techniker Krankenkasse)
     - gov: A document that is issued by a government or other official institution
-    - hilde8: A document that is related to the apartment at Hildebrandtstraße 8
+    - hildebrandtstraße: A document that is related to the apartment at Hildebrandtstraße 8
     - check24: A document that is related to my work at Check24
     - insurance: A document that is related to insurance
 	- misc: A document that does not fit into any of the above categories
+    - rheinbahn: A document that is related to Rheinbahn
 
     If you feel that the document does not fit any of the above categories but fits well in a broader category, you may suggest one (only in one word).
 	`
@@ -254,6 +254,7 @@ func watchFTP() error {
 		return errors.New("FTP_PATH not set")
 	}
 
+
 	slog.Info("Watching FTP", "host", host, "user", user, "path", path)
 
 	c, err := ftp.Dial(fmt.Sprintf("%s:%d", host, 21), ftp.DialWithTimeout(5*time.Second))
@@ -307,8 +308,16 @@ func watchFTP() error {
 				classification, err := classifyFile(fileName)
 				if err != nil {
 					slog.Error("Error classifying file", "error", err)
+                    sendTelegramMessage(fmt.Sprintf("Error classifying file: %s", err))
 					continue
 				}
+
+                nextcloudURL, err := uploadFileToNextcloud(classification, fileName)
+                if err != nil {
+                    slog.Error("Error uploading file to Nextcloud", "error", err)
+                    sendTelegramMessage(fmt.Sprintf("Error uploading file to Nextcloud: <pre>%s</pre>", err))
+                    continue
+                }
 
 				err = sendTelegramMessage(fmt.Sprintf(`Classified file: %s
 
@@ -316,7 +325,7 @@ func watchFTP() error {
 
 <blockquote><b>Category: %s</b></blockquote>
 
-You can download it from <a href="ftp://ftp@3nt3.de/scans">FTP</a> or something idk`, entry.Name, classification.Title, classification.Category))
+You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification.Title, classification.Category, nextcloudURL))
 				if err != nil {
 					slog.Error("Error sending Telegram message", "error", err)
 				}
@@ -397,3 +406,83 @@ func sendTelegramMessage(message string) error {
 
 	return nil
 }
+
+func uploadFileToNextcloud(classification Classification, localFilePath string) (string, error) {
+    // Open local file
+    file, err := os.Open(localFilePath)
+    if err != nil {
+        slog.Error("Error opening local file", "error", err)
+        return "", err
+    }
+    defer file.Close()
+
+    // Read the file contents into a byte slice
+    fileContents, err := io.ReadAll(file)
+    if err != nil {
+        slog.Error("Error reading local file", "error", err)
+        return "", err
+    }
+
+    // Get the Nextcloud credentials from the environment
+    nextcloudURL := os.Getenv("NEXTCLOUD_URL")
+    username := os.Getenv("NEXTCLOUD_USERNAME")
+    password := os.Getenv("NEXTCLOUD_PASSWORD")
+
+    if nextcloudURL == "" {
+        return "", errors.New("NEXTCLOUD_URL not set")
+    }
+
+    if username == "" {
+        return "", errors.New("NEXTCLOUD_USERNAME not set")
+    }
+
+    now := time.Now()
+    newFileName := fmt.Sprintf("%s_%s", now.Format("2006-01-02"), classification.FileName)
+
+    remotePath := fmt.Sprintf("Documents/scans/%s/%s", classification.Category, newFileName)
+    slog.Debug("Uploading file to Nextcloud", "remotePath", remotePath)
+
+    // Create a PUT request to upload the file to Nextcloud
+    requestURL := fmt.Sprintf("%s/remote.php/dav/files/%s/%s", nextcloudURL, username, remotePath)
+	req, err := http.NewRequest("PUT", requestURL, bytes.NewReader(fileContents))
+    if err != nil {
+        slog.Error("Error creating PUT request", "error", err)
+        return "", err
+    }
+
+    // Set the request headers
+    req.Header.Set("Content-Type", "application/octet-stream")
+    req.SetBasicAuth(username, password)
+
+    // Send the request
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        slog.Error("Error sending PUT request", "error", err)
+        return "", err
+    }
+    defer resp.Body.Close()
+
+    body, _ := io.ReadAll(resp.Body)
+    slog.Debug("Response body", "body", string(body))
+
+    // Check if the request was successful
+    if resp.StatusCode != http.StatusCreated {
+        slog.Error("Error uploading file to Nextcloud", "status", resp.Status)
+
+
+        return "", errors.New(fmt.Sprintf("Error uploading file to Nextcloud: %v", string(body)))
+    }
+
+    slog.Info("Uploaded file to Nextcloud", "remotePath", remotePath)
+
+    // get the oc-fileid from response headers
+    ocFileId := resp.Header.Get("oc-fileid")
+    ocEtag := resp.Header.Get("oc-etag")
+
+    slog.Debug("oc-fileid", "oc-fileid", ocFileId)
+    slog.Debug("oc-etag", "oc-etag", ocEtag)
+
+    return fmt.Sprintf("%s/f/%s", nextcloudURL, ocFileId), nil
+}
+
