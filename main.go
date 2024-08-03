@@ -197,6 +197,7 @@ func classifyFile(file string) (Classification, error) {
     - insurance: A document that is related to insurance
 	- misc: A document that does not fit into any of the above categories
     - rheinbahn: A document that is related to Rheinbahn
+    - hs-bochum: A document that is related to my studies at Hochschule Bochum
 
     If you feel that the document does not fit any of the above categories but fits well in a broader category, you may suggest one (only in one word).
 	`
