@@ -307,7 +307,7 @@ func watchFTP() error {
                 slog.Info("New file", "file", entry.Name)
 				sendTelegramMessage(fmt.Sprintf("<b>New file: <code>%s</code></b>", entry.Name))
 
-                if *knownFiles[entry.Name] != entry.Size {
+                if knownFiles[entry.Name] != nil && *knownFiles[entry.Name] != entry.Size {
                     slog.Info("File size changed", "file", entry.Name)
                     sendTelegramMessage(fmt.Sprintf("<b>File size changed: <code>%s</code></b><br/>Waiting for a bit", entry.Name))
 
