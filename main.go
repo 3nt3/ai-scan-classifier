@@ -271,8 +271,7 @@ func watchFTP() error {
 	}
 
 	// Store already known files and their size
-    classifiedFiles := make(map[string]bool)
-	knownFiles := make(map[string]*uint64)
+    knownFiles := make(map[string]bool)
 	firstRun := true
 
 	entries, err := c.List(path)
@@ -284,10 +283,7 @@ func watchFTP() error {
 	for _, entry := range entries {
 		if entry.Type == ftp.EntryTypeFile {
             // we don't actually check if the file has been classified, we just ignore the existing ones.
-			classifiedFiles[entry.Name] = true
-
-            s := entry.Size
-            knownFiles[entry.Name] = &s
+			knownFiles[entry.Name] = true
 		}
 	}
 
@@ -303,59 +299,58 @@ func watchFTP() error {
         slog.Debug("Known files", "files", knownFiles)
 
 		for _, entry := range entries {
-			if entry.Type == ftp.EntryTypeFile && !classifiedFiles[entry.Name] {
+			if entry.Type == ftp.EntryTypeFile && !knownFiles[entry.Name] {
                 slog.Info("New file", "file", entry.Name)
 				sendTelegramMessage(fmt.Sprintf("<b>New file: <code>%s</code></b>", entry.Name))
 
-                if knownFiles[entry.Name] != nil && *knownFiles[entry.Name] != entry.Size {
-                    slog.Info("File size changed", "file", entry.Name)
-                    sendTelegramMessage(fmt.Sprintf("<b>File size changed: <code>%s</code></b><br/>Waiting for a bit", entry.Name))
+                const maxTries = 5
+                const delay = 5 * time.Second
+                for i := 0; i < maxTries; i++ {
+                    fileName, err := downloadFile(c, fmt.Sprintf("%s/%s", path, entry.Name))
+                    if err != nil {
+                        slog.Error("Error downloading file", "error", err)
+                        sendTelegramMessage(fmt.Sprintf("Error downloading file: <pre>%s</pre>", err))
+                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
+                        time.Sleep(delay)
+                        continue
+                    }
+                    classification, err := classifyFile(fileName)
+                    if err != nil {
+                        slog.Error("Error classifying file", "error", err)
+                        sendTelegramMessage(fmt.Sprintf("Error classifying file: %s", err))
+                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
+                        time.Sleep(delay)
+                        continue
+                    }
 
-                    s := entry.Size
-                    knownFiles[entry.Name] = &s
+                    nextcloudURL, err := uploadFileToNextcloud(classification, fileName)
+                    if err != nil {
+                        slog.Error("Error uploading file to Nextcloud", "error", err)
+                        sendTelegramMessage(fmt.Sprintf("Error uploading file to Nextcloud: <pre>%s</pre>", err))
+                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
+                        time.Sleep(delay)
+                        continue
+                    }
 
-                    // FIXME: this seems like bad design
-                    time.Sleep(2 * time.Second)
+                    err = sendTelegramMessage(fmt.Sprintf(`Classified file: %s
+
+    <b>%s</b>
+
+    <blockquote><b>Category: %s</b></blockquote>
+
+    You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification.Title, classification.Category, nextcloudURL))
+                    if err != nil {
+                        slog.Error("Error sending Telegram message", "error", err)
+                    }
                 }
-
-
-				fileName, err := downloadFile(c, fmt.Sprintf("%s/%s", path, entry.Name))
-				if err != nil {
-					slog.Error("Error downloading file", "error", err)
-					continue
-				}
-				classification, err := classifyFile(fileName)
-				if err != nil {
-					slog.Error("Error classifying file", "error", err)
-                    sendTelegramMessage(fmt.Sprintf("Error classifying file: %s", err))
-					continue
-				}
-
-                nextcloudURL, err := uploadFileToNextcloud(classification, fileName)
-                if err != nil {
-                    slog.Error("Error uploading file to Nextcloud", "error", err)
-                    sendTelegramMessage(fmt.Sprintf("Error uploading file to Nextcloud: <pre>%s</pre>", err))
-                    continue
-                }
-
-				err = sendTelegramMessage(fmt.Sprintf(`Classified file: %s
-
-<b>%s</b>
-
-<blockquote><b>Category: %s</b></blockquote>
-
-You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification.Title, classification.Category, nextcloudURL))
-				if err != nil {
-					slog.Error("Error sending Telegram message", "error", err)
-				}
 			}
 		}
 
         // clear known knownFiles
-        classifiedFiles = make(map[string]bool)
+        knownFiles = make(map[string]bool)
         for _, entry := range entries {
             if entry.Type == ftp.EntryTypeFile {
-                classifiedFiles[entry.Name] = true
+                knownFiles[entry.Name] = true
             }
         }
 
