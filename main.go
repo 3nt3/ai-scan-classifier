@@ -342,6 +342,8 @@ func watchFTP() error {
                     if err != nil {
                         slog.Error("Error sending Telegram message", "error", err)
                     }
+
+                    break
                 }
 			}
 		}
