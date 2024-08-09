@@ -270,8 +270,9 @@ func watchFTP() error {
 		return err
 	}
 
-	// Store already known files
-	knownFiles := make(map[string]bool)
+	// Store already known files and their size
+    classifiedFiles := make(map[string]bool)
+	knownFiles := make(map[string]*uint64)
 	firstRun := true
 
 	entries, err := c.List(path)
@@ -282,7 +283,11 @@ func watchFTP() error {
 
 	for _, entry := range entries {
 		if entry.Type == ftp.EntryTypeFile {
-			knownFiles[entry.Name] = true
+            // we don't actually check if the file has been classified, we just ignore the existing ones.
+			classifiedFiles[entry.Name] = true
+
+            s := entry.Size
+            knownFiles[entry.Name] = &s
 		}
 	}
 
@@ -298,9 +303,22 @@ func watchFTP() error {
         slog.Debug("Known files", "files", knownFiles)
 
 		for _, entry := range entries {
-			if entry.Type == ftp.EntryTypeFile && !knownFiles[entry.Name] {
-				slog.Info("New file", "file", entry.Name)
+			if entry.Type == ftp.EntryTypeFile && !classifiedFiles[entry.Name] {
+                slog.Info("New file", "file", entry.Name)
 				sendTelegramMessage(fmt.Sprintf("<b>New file: <code>%s</code></b>", entry.Name))
+
+                if *knownFiles[entry.Name] != entry.Size {
+                    slog.Info("File size changed", "file", entry.Name)
+                    sendTelegramMessage(fmt.Sprintf("<b>File size changed: <code>%s</code></b><br/>Waiting for a bit", entry.Name))
+
+                    s := entry.Size
+                    knownFiles[entry.Name] = &s
+
+                    // FIXME: this seems like bad design
+                    time.Sleep(2 * time.Second)
+                }
+
+
 				fileName, err := downloadFile(c, fmt.Sprintf("%s/%s", path, entry.Name))
 				if err != nil {
 					slog.Error("Error downloading file", "error", err)
@@ -330,14 +348,16 @@ You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification
 				if err != nil {
 					slog.Error("Error sending Telegram message", "error", err)
 				}
+
+                classifiedFiles[entry.Name] = entry.Size
 			}
 		}
 
         // clear known knownFiles
-        knownFiles = make(map[string]bool)
+        classifiedFiles = make(map[string]bool)
         for _, entry := range entries {
             if entry.Type == ftp.EntryTypeFile {
-                knownFiles[entry.Name] = true
+                classifiedFiles[entry.Name] = true
             }
         }
 
