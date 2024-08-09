@@ -178,7 +178,7 @@ func classifyFile(file string) (Classification, error) {
 	task is to classify its content as one of the following categories. Give an explanation, a title, a filename, and a category in JSON format.
 
     An example response would be:
-    {"category": "ids", "explanation": "This is a scan of a German ID card (Personalausweis) for Max Mustermann.", title: "Perso Max", "filename": "perso_max.pdf"}
+    {"category": "tk", "explanation": "This is a scan of a letter by TK (Techniker Krankenkasse), issuing an SMS-Tan reset code", title: "SMS-TAN Wiederherstellungscode", "filename": "sms_tan_reset_code.pdf"}
 
 	- bizfactory: A document that is related to my work at Biz Factory GmbH
 	- ids: A scan of an ID card, passport, or similar card
@@ -199,7 +199,7 @@ func classifyFile(file string) (Classification, error) {
     - rheinbahn: A document that is related to Rheinbahn
     - hs-bochum: A document that is related to my studies at Hochschule Bochum
 
-    If you feel that the document does not fit any of the above categories but fits well in a broader category, you may suggest one (only in one word).
+    If you feel that the document does not fit any of the above categories but fits well in a broader category, you may suggest one (only in one word). Only do so as a last resort.
 	`
 
 	client := openai.NewClient(openaiKey)
