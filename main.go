@@ -348,8 +348,6 @@ You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification
 				if err != nil {
 					slog.Error("Error sending Telegram message", "error", err)
 				}
-
-                classifiedFiles[entry.Name] = entry.Size
 			}
 		}
 
