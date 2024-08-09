@@ -487,7 +487,7 @@ func uploadFileToNextcloud(classification Classification, localFilePath string) 
         slog.Error("Error uploading file to Nextcloud", "status", resp.Status)
 
 
-        return "", errors.New(fmt.Sprintf("Error uploading file to Nextcloud: %v", string(body)))
+        return "", errors.New(fmt.Sprintf("Error uploading file to Nextcloud: %s, %v", resp.Status, string(body)))
     }
 
     slog.Info("Uploaded file to Nextcloud", "remotePath", remotePath)
