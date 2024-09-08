@@ -1,6 +1,7 @@
 package main
 
 import (
+	"3nt3/ai-scan-classifier/storage"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,12 +13,14 @@ import (
 	"os/exec"
 	"time"
 
+	"bytes"
+
 	"github.com/jlaffaye/ftp"
 	"github.com/lmittmann/tint"
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
+	"github.com/spf13/viper"
 	"github.com/urfave/cli/v2"
-    "bytes"
 
 	dotenv "github.com/joho/godotenv"
 	openai "github.com/sashabaranov/go-openai"
@@ -88,15 +91,15 @@ func main() {
 			}
 			programLevel.Set(level)
 
-            // set log log-style
-            switch c.String("log-style") {
-            case "json":
-                slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel})))
-            case "plain":
-                slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
-            default:
-                slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
-            }
+			// set log log-style
+			switch c.String("log-style") {
+			case "json":
+				slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel})))
+			case "plain":
+				slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
+			default:
+				slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{TimeFormat: time.DateTime, Level: programLevel})))
+			}
 
 			slog.Debug("Log level", "level", programLevel.String())
 
@@ -110,7 +113,9 @@ func main() {
 			if c.Bool("daemon") {
 				slog.Info("Running as daemon")
 
-				return watchFTP()
+				go storage.RunServer()
+
+				return daemon()
 			}
 
 			// if no arguments are provided and it's not the help command, return an errors
@@ -127,14 +132,7 @@ func main() {
 	app.Run(os.Args)
 }
 
-type Classification struct {
-	Title       string `json:"title"`
-	Category    string `json:"category"`
-	Explanation string `json:"explanation"`
-    FileName    string `json:"filename"`
-}
-
-func classifyFile(file string) (Classification, error) {
+func classifyFile(file string) (storage.Classification, error) {
 	// remove files from previous runs
 	toRemove := []string{"/tmp/output.pdf", "/tmp/output.pdf.txt"}
 	for _, file := range toRemove {
@@ -149,14 +147,14 @@ func classifyFile(file string) (Classification, error) {
 	output, err := exec.Command("ocrmypdf", file, "--redo-ocr", "-l", "deu", "/tmp/output.pdf", "--sidecar").CombinedOutput()
 	if err != nil {
 		slog.Error("Error running ocrmypdf", "error", err, "output", string(output))
-		return Classification{}, err
+		return storage.Classification{}, err
 	}
 
 	// read the sidecar file
 	ocr, err := os.ReadFile("/tmp/output.pdf.txt")
 	if err != nil {
 		slog.Error("Error reading sidecar file", "error", err)
-		return Classification{}, err
+		return storage.Classification{}, err
 	}
 
 	// only include the first 2000 characters
@@ -222,39 +220,55 @@ func classifyFile(file string) (Classification, error) {
 
 	if err != nil {
 		slog.Error("Error running OpenAI API", "error", err)
-		return Classification{}, err
+		return storage.Classification{}, err
 	}
 
-	var classification Classification
+	var classification storage.Classification
 	err = json.Unmarshal([]byte(resp.Choices[0].Message.Content), &classification)
 	if err != nil {
 		slog.Error("Error parsing OpenAI response", "error", err)
-		return Classification{}, err
+		return storage.Classification{}, err
 	}
 
 	slog.Info("Classification", "title", classification.Title, "category", classification.Category, "explanation", classification.Explanation)
 	return classification, nil
 }
 
-func watchFTP() error {
-	host := os.Getenv("FTP_HOST")
-	user := os.Getenv("FTP_USER")
-	password := os.Getenv("FTP_PASSWORD")
-	path := os.Getenv("FTP_PATH")
+func daemon() error {
+	viper.SetConfigName("daemon")
+	viper.SetConfigType("yml")
+	viper.AddConfigPath(".")
 
-	if host == "" {
-		return errors.New("FTP_HOST not set")
-	}
-	if user == "" {
-		return errors.New("FTP_USER not set")
-	}
-	if password == "" {
-		return errors.New("FTP_PASSWORD not set")
-	}
-	if path == "" {
-		return errors.New("FTP_PATH not set")
+	err := viper.ReadInConfig()
+	if err != nil {
+		slog.Error("Error reading config file", "error", err)
+		return err
 	}
 
+	if !viper.IsSet("ftp.host") {
+		slog.Error("FTP host not set")
+		return errors.New("FTP host not set")
+	}
+
+	if !viper.IsSet("ftp.username") {
+		slog.Error("FTP username not set")
+		return errors.New("FTP username not set")
+	}
+
+	if !viper.IsSet("ftp.password") {
+		slog.Error("FTP password not set")
+		return errors.New("FTP password not set")
+	}
+
+	if !viper.IsSet("ftp.path") {
+		slog.Error("FTP path not set")
+		return errors.New("FTP path not set")
+	}
+
+	host := viper.GetString("ftp.host")
+	user := viper.GetString("ftp.username")
+	password := viper.GetString("ftp.password")
+	path := viper.GetString("ftp.path")
 
 	slog.Info("Watching FTP", "host", host, "user", user, "path", path)
 
@@ -271,20 +285,13 @@ func watchFTP() error {
 	}
 
 	// Store already known files and their size
-    knownFiles := make(map[string]bool)
+	knownFiles := make(map[string]map[string]bool)
 	firstRun := true
 
-	entries, err := c.List(path)
+	_, err = c.List(path)
 	if err != nil {
 		slog.Error("Error listing FTP directory", "error", err)
 		return err
-	}
-
-	for _, entry := range entries {
-		if entry.Type == ftp.EntryTypeFile {
-            // we don't actually check if the file has been classified, we just ignore the existing ones.
-			knownFiles[entry.Name] = true
-		}
 	}
 
 	slog.Info("Known files", "files", knownFiles)
@@ -296,65 +303,16 @@ func watchFTP() error {
 			return err
 		}
 
-        slog.Debug("Known files", "files", knownFiles)
+		slog.Debug("Known files", "files", knownFiles)
 
 		for _, entry := range entries {
-			if entry.Type == ftp.EntryTypeFile && !knownFiles[entry.Name] {
-                slog.Info("New file", "file", entry.Name)
-				sendTelegramMessage(fmt.Sprintf("<b>New file: <code>%s</code></b>", entry.Name))
-
-                const maxTries = 5
-                const delay = 5 * time.Second
-                for i := 0; i < maxTries; i++ {
-                    fileName, err := downloadFile(c, fmt.Sprintf("%s/%s", path, entry.Name))
-                    if err != nil {
-                        slog.Error("Error downloading file", "error", err)
-                        sendTelegramMessage(fmt.Sprintf("Error downloading file: <pre>%s</pre>", err))
-                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
-                        time.Sleep(delay)
-                        continue
-                    }
-                    classification, err := classifyFile(fileName)
-                    if err != nil {
-                        slog.Error("Error classifying file", "error", err)
-                        sendTelegramMessage(fmt.Sprintf("Error classifying file: %s", err))
-                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
-                        time.Sleep(delay)
-                        continue
-                    }
-
-                    nextcloudURL, err := uploadFileToNextcloud(classification, fileName)
-                    if err != nil {
-                        slog.Error("Error uploading file to Nextcloud", "error", err)
-                        sendTelegramMessage(fmt.Sprintf("Error uploading file to Nextcloud: <pre>%s</pre>", err))
-                        sendTelegramMessage(fmt.Sprintf("%d tries left", maxTries-i))
-                        time.Sleep(delay)
-                        continue
-                    }
-
-                    err = sendTelegramMessage(fmt.Sprintf(`Classified file: %s
-
-    <b>%s</b>
-
-    <blockquote><b>Category: %s</b></blockquote>
-
-    You can download it from <a href="%s">Nextcloud</a>`, entry.Name, classification.Title, classification.Category, nextcloudURL))
-                    if err != nil {
-                        slog.Error("Error sending Telegram message", "error", err)
-                    }
-
-                    break
-                }
+			if entry.Type != ftp.EntryTypeFolder {
+				slog.Warn("Your FTP directory should only contain folders, check your printer configuration", "file", entry.Name)
+				continue
 			}
-		}
 
-        // clear known knownFiles
-        knownFiles = make(map[string]bool)
-        for _, entry := range entries {
-            if entry.Type == ftp.EntryTypeFile {
-                knownFiles[entry.Name] = true
-            }
-        }
+			go processUserFolder(c, path, entry.Name, knownFiles[entry.Name])
+		}
 
 		time.Sleep(5 * time.Second)
 
@@ -394,12 +352,19 @@ func downloadFile(c *ftp.ServerConn, path string) (string, error) {
 	return file.Name(), nil
 }
 
-func sendTelegramMessage(message string) error {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-
-	if token == "" {
-		return errors.New("TELEGRAM_BOT_TOKEN not set")
+func sendTelegramMessage(user string, message string) error {
+	if !viper.IsSet("telegram_token") {
+		return errors.New("Telegram token not set")
 	}
+
+	token := viper.GetString("telegram_token")
+
+	// get username from config
+	if !viper.IsSet(fmt.Sprintf("users.%s.telegram", user)) {
+		return errors.New("Telegram user not set")
+	}
+
+	telegramUser := viper.GetString(fmt.Sprintf("users.%s.telegram", user))
 
 	bot, err := telego.NewBot(token, telego.WithDefaultDebugLogger())
 	if err != nil {
@@ -407,12 +372,7 @@ func sendTelegramMessage(message string) error {
 		return err
 	}
 
-	const USER = 562757564
-
-    // charactersThatNeedReplacing := regexp.MustCompile(`[.\-\\*\~\[\]#]`)
-    // escapedMsg := charactersThatNeedReplacing.ReplaceAllString(message, `\$0`)
-
-	msg, err := bot.SendMessage(tu.Message(tu.ID(USER), message).WithParseMode(telego.ModeHTML))
+	msg, err := bot.SendMessage(tu.Message(tu.Username(telegramUser), message).WithParseMode(telego.ModeHTML))
 	if err != nil {
 		slog.Error("Error sending Telegram message", "error", err)
 		return err
@@ -423,82 +383,183 @@ func sendTelegramMessage(message string) error {
 	return nil
 }
 
-func uploadFileToNextcloud(classification Classification, localFilePath string) (string, error) {
-    // Open local file
-    file, err := os.Open(localFilePath)
-    if err != nil {
-        slog.Error("Error opening local file", "error", err)
-        return "", err
-    }
-    defer file.Close()
+func uploadFileToNextcloud(user string, classification storage.Classification, localFilePath string) (string, error) {
+	// Open local file
+	file, err := os.Open(localFilePath)
+	if err != nil {
+		slog.Error("Error opening local file", "error", err)
+		return "", err
+	}
+	defer file.Close()
 
-    // Read the file contents into a byte slice
-    fileContents, err := io.ReadAll(file)
-    if err != nil {
-        slog.Error("Error reading local file", "error", err)
-        return "", err
-    }
+	// Read the file contents into a byte slice
+	fileContents, err := io.ReadAll(file)
+	if err != nil {
+		slog.Error("Error reading local file", "error", err)
+		return "", err
+	}
 
-    // Get the Nextcloud credentials from the environment
-    nextcloudURL := os.Getenv("NEXTCLOUD_URL")
-    username := os.Getenv("NEXTCLOUD_USERNAME")
-    password := os.Getenv("NEXTCLOUD_PASSWORD")
+	// Get the Nextcloud credentials from the environment
+	nextcloudURL := viper.GetString(fmt.Sprintf("%s.nextcloud.url", user))
+	username := viper.GetString(fmt.Sprintf("%s.nextcloud.username", user))
+	password := viper.GetString(fmt.Sprintf("%s.nextcloud.password", user))
 
-    if nextcloudURL == "" {
-        return "", errors.New("NEXTCLOUD_URL not set")
-    }
+	if !viper.IsSet(fmt.Sprintf("%s.nextcloud.url", user)) {
+		slog.Error("Nextcloud URL not set", "user", user)
+		return "", errors.New("Nextcloud URL not set")
+	}
 
-    if username == "" {
-        return "", errors.New("NEXTCLOUD_USERNAME not set")
-    }
+	if !viper.IsSet(fmt.Sprintf("%s.nextcloud.username", user)) {
+		slog.Error("Nextcloud username not set", "user", user)
+		return "", errors.New("Nextcloud username not set")
+	}
 
-    now := time.Now()
-    newFileName := fmt.Sprintf("%s_%s", now.Format("2006-01-02"), classification.FileName)
+	if !viper.IsSet(fmt.Sprintf("%s.nextcloud.password", user)) {
+		slog.Error("Nextcloud password not set", "user", user)
+		return "", errors.New("Nextcloud password not set")
+	}
 
-    remotePath := fmt.Sprintf("Documents/scans/%s/%s", classification.Category, newFileName)
-    slog.Debug("Uploading file to Nextcloud", "remotePath", remotePath)
+	now := time.Now()
+	newFileName := fmt.Sprintf("%s_%s", now.Format("2006-01-02"), classification.FileName)
 
-    // Create a PUT request to upload the file to Nextcloud
-    requestURL := fmt.Sprintf("%s/remote.php/dav/files/%s/%s", nextcloudURL, username, remotePath)
+	remotePath := fmt.Sprintf("Documents/scans/%s/%s", classification.Category, newFileName)
+	slog.Debug("Uploading file to Nextcloud", "remotePath", remotePath)
+
+	// Create a PUT request to upload the file to Nextcloud
+	requestURL := fmt.Sprintf("%s/remote.php/dav/files/%s/%s", nextcloudURL, username, remotePath)
 	req, err := http.NewRequest("PUT", requestURL, bytes.NewReader(fileContents))
-    if err != nil {
-        slog.Error("Error creating PUT request", "error", err)
-        return "", err
-    }
+	if err != nil {
+		slog.Error("Error creating PUT request", "error", err)
+		return "", err
+	}
 
-    // Set the request headers
-    req.Header.Set("Content-Type", "application/octet-stream")
-    req.SetBasicAuth(username, password)
+	// Set the request headers
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.SetBasicAuth(username, password)
 
-    // Send the request
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        slog.Error("Error sending PUT request", "error", err)
-        return "", err
-    }
-    defer resp.Body.Close()
+	// Send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("Error sending PUT request", "error", err)
+		return "", err
+	}
+	defer resp.Body.Close()
 
-    body, _ := io.ReadAll(resp.Body)
-    slog.Debug("Response body", "body", string(body))
+	body, _ := io.ReadAll(resp.Body)
+	slog.Debug("Response body", "body", string(body))
 
-    // Check if the request was successful
-    if resp.StatusCode != http.StatusCreated {
-        slog.Error("Error uploading file to Nextcloud", "status", resp.Status)
+	// Check if the request was successful
+	if resp.StatusCode != http.StatusCreated {
+		slog.Error("Error uploading file to Nextcloud", "status", resp.Status)
 
+		return "", errors.New(fmt.Sprintf("Error uploading file to Nextcloud: %s, %v", resp.Status, string(body)))
+	}
 
-        return "", errors.New(fmt.Sprintf("Error uploading file to Nextcloud: %s, %v", resp.Status, string(body)))
-    }
+	slog.Info("Uploaded file to Nextcloud", "remotePath", remotePath)
 
-    slog.Info("Uploaded file to Nextcloud", "remotePath", remotePath)
+	// get the oc-fileid from response headers
+	ocFileId := resp.Header.Get("oc-fileid")
+	ocEtag := resp.Header.Get("oc-etag")
 
-    // get the oc-fileid from response headers
-    ocFileId := resp.Header.Get("oc-fileid")
-    ocEtag := resp.Header.Get("oc-etag")
+	slog.Debug("oc-fileid", "oc-fileid", ocFileId)
+	slog.Debug("oc-etag", "oc-etag", ocEtag)
 
-    slog.Debug("oc-fileid", "oc-fileid", ocFileId)
-    slog.Debug("oc-etag", "oc-etag", ocEtag)
-
-    return fmt.Sprintf("%s/f/%s", nextcloudURL, ocFileId), nil
+	return fmt.Sprintf("%s/f/%s", nextcloudURL, ocFileId), nil
 }
 
+func processUserFolder(c *ftp.ServerConn, path string, user string, knownFiles map[string]bool) {
+	entries, err := c.List(fmt.Sprintf("%s/%s", path, user))
+	if err != nil {
+		slog.Error("Error listing FTP directory", "error", err)
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.Type != ftp.EntryTypeFolder {
+			slog.Warn("Your FTP user directories should only contain files, go fuck yourself", "folder", entry.Name)
+		}
+
+		if _, ok := knownFiles[entry.Name]; ok {
+			continue
+		}
+
+		slog.Info("New file", "file", entry.Name)
+		sendTelegramMessage(user, fmt.Sprintf("<b>New file: <code>%s</code></b>", entry.Name))
+
+		const maxTries = 5
+		const delay = 5 * time.Second
+		for i := 0; i < maxTries; i++ {
+			fileName, err := downloadFile(c, fmt.Sprintf("%s/%s", path, entry.Name))
+			if err != nil {
+				slog.Error("Error downloading file", "error", err)
+				sendTelegramMessage(user, fmt.Sprintf("Error downloading file: <pre>%s</pre>", err))
+				sendTelegramMessage(user, fmt.Sprintf("%d tries left", maxTries-i))
+				time.Sleep(delay)
+				continue
+			}
+			classification, err := classifyFile(fileName)
+			if err != nil {
+				slog.Error("Error classifying file", "error", err)
+				sendTelegramMessage(user, fmt.Sprintf("Error classifying file: %s", err))
+				sendTelegramMessage(user, fmt.Sprintf("%d tries left", maxTries-i))
+				time.Sleep(delay)
+				continue
+			}
+
+			var providerName string
+			var downloadURL string
+			if viper.IsSet(fmt.Sprintf("%s.nextcloud", user)) {
+				providerName = "Nextcloud"
+				downloadURL, err = uploadFileToNextcloud(user, classification, fileName)
+			} else if viper.IsSet(fmt.Sprintf("%s.google_drive", user)) {
+				providerName = "Google Drive"
+				downloadURL, err = uploadFileToGoogleDrive(user, classification, fileName)
+			} else {
+				slog.Error("No cloud storage provider set", "user", user)
+				sendTelegramMessage(user, "No cloud storage provider set")
+				break
+			}
+
+			if err != nil {
+				slog.Error("Error uploading file", "provider", providerName, "error", err)
+				sendTelegramMessage(user, fmt.Sprintf("Error uploading file: <pre>%s</pre>", err))
+				sendTelegramMessage(user, fmt.Sprintf("%d tries left", maxTries-i))
+				time.Sleep(delay)
+				continue
+			}
+
+			err = sendTelegramMessage(user, fmt.Sprintf(`Classified file: %s
+
+<b>%s</b>
+
+<blockquote><b>Category: %s</b></blockquote>
+
+You can download it from <a href="%s">%s</a>`, entry.Name, classification.Title, classification.Category, downloadURL, providerName))
+			if err != nil {
+				slog.Error("Error sending Telegram message", "error", err)
+			}
+
+			break
+		}
+	}
+
+	// clear knownFiles
+	knownFiles = make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Type == ftp.EntryTypeFile {
+			knownFiles[entry.Name] = true
+		}
+	}
+}
+
+func uploadFileToGoogleDrive(user string, classification storage.Classification, localFilePath string) (string, error) {
+    // get email from config
+    if !viper.IsSet(fmt.Sprintf("users.%s.google_drive.email", user)) {
+        return "", errors.New("Google Drive email not set for user")
+    }
+
+    email := viper.GetString(fmt.Sprintf("users.%s.google_drive.email", user))
+
+    storage.StoreFile(email, localFilePath, classification)
+}

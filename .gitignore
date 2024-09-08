@@ -63,3 +63,7 @@ Temporary Items
 .env
 
 /ai-scan-classifier
+
+daemon.yml
+tokens.db
+creds.json

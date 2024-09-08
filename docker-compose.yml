@@ -3,13 +3,3 @@ services:
         build: .
         container_name: ai-scan-classifier
         restart: always
-        environment:
-            - "OPENAI_KEY="
-            - "FTP_HOST="
-            - "FTP_USER="
-            - "FTP_PASSWORD="
-            - "FTP_PATH="
-            - "TELEGRAM_BOT_TOKEN="
-            - "NEXTCLOUD_URL="
-            - "NEXTCLOUD_USERNAME="
-            - "NEXTCLOUD_PASSWORD="
