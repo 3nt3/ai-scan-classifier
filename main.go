@@ -172,13 +172,14 @@ func classifyFile(file string) (storage.Classification, error) {
 	openaiKey := os.Getenv("OPENAI_KEY")
 
 	prompt := `
-	You will be provided with a the OCR version of a scanned document, and your
-	task is to classify its content as one of the following categories. Give an explanation, a title, a filename, and a category in JSON format.
+	You will be provided with a scanned document, and your
+	task is to classify its content as one of the following categories. Give an explanation, a notice if it's related to my business (Nia Schlegel Automation) or personal, title, a filename, and a category in JSON format.
 
     An example response would be:
-    {"category": "tk", "explanation": "This is a scan of a letter by TK (Techniker Krankenkasse), issuing an SMS-Tan reset code", title: "SMS-TAN Wiederherstellungscode", "filename": "sms_tan_reset_code.pdf"}
+    {"business": false,"category": "tk", "explanation": "This is a scan of a letter by TK (Techniker Krankenkasse), issuing an SMS-Tan reset code", title: "SMS-TAN Wiederherstellungscode", "filename": "sms_tan_reset_code.pdf"}
 
-	- bizfactory: A document that is related to my work at Biz Factory GmbH
+    Personal categories:
+    - bizfactory: A document that is related to my work at Biz Factory GmbH
 	- ids: A scan of an ID card, passport, or similar card
 	- klausuren: A scan of an exam or similar
 	- schule: A document that is related to my school education
@@ -193,9 +194,17 @@ func classifyFile(file string) (storage.Classification, error) {
     - hildebrandtstraße: A document that is related to the apartment at Hildebrandtstraße 8
     - check24: A document that is related to my work at Check24
     - insurance: A document that is related to insurance
-	- misc: A document that does not fit into any of the above categories
     - rheinbahn: A document that is related to Rheinbahn
     - hs-bochum: A document that is related to my studies at Hochschule Bochum
+    - schlegel-automation: A document that is related to my work as Schlegel Automation
+	- misc: A document that does not fit into any of the above categories
+
+	Business categories:
+	- invoices
+	- gov: A document that is issued by a government or other official institution
+	- ihk: A document that is issued by the IHK (Industrie- und Handelskammer)
+	- correspondence: A document that is related to correspondence with people or other businesses
+	- tax: A document that is related to taxes
 
     If you feel that the document does not fit any of the above categories but fits well in a broader category, you may suggest one (only in one word). Only do so as a last resort.
 	`
@@ -204,7 +213,7 @@ func classifyFile(file string) (storage.Classification, error) {
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
-			Model: openai.GPT4,
+			Model: openai.GPT5Nano,
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -228,6 +237,11 @@ func classifyFile(file string) (storage.Classification, error) {
 	if err != nil {
 		slog.Error("Error parsing OpenAI response", "error", err)
 		return storage.Classification{}, err
+	}
+
+	if classification.Business {
+		slog.Info("Business classification", "title", classification.Title, "category", classification.Category, "explanation", classification.Explanation)
+		return classification, nil
 	}
 
 	slog.Info("Classification", "title", classification.Title, "category", classification.Category, "explanation", classification.Explanation)
@@ -422,7 +436,13 @@ func uploadFileToNextcloud(user string, classification storage.Classification, l
 	now := time.Now()
 	newFileName := fmt.Sprintf("%s_%s", now.Format("2006-01-02"), classification.FileName)
 
-	remotePath := fmt.Sprintf("Documents/scans/%s/%s", classification.Category, newFileName)
+	var rootPath string
+	if classification.Business {
+		rootPath = "work/docs"
+	} else {
+		rootPath = "Documents/scans"
+	}
+	remotePath := fmt.Sprintf("%s/%s/%s", rootPath, classification.Category, newFileName)
 	slog.Debug("Uploading file to Nextcloud", "remotePath", remotePath)
 
 	// Create a PUT request to upload the file to Nextcloud
@@ -554,12 +574,12 @@ You can download it from <a href="%s">%s</a>`, entry.Name, classification.Title,
 }
 
 func uploadFileToGoogleDrive(user string, classification storage.Classification, localFilePath string) (string, error) {
-    // get email from config
-    if !viper.IsSet(fmt.Sprintf("users.%s.google_drive.email", user)) {
-        return "", errors.New("Google Drive email not set for user")
-    }
+	// get email from config
+	if !viper.IsSet(fmt.Sprintf("users.%s.google_drive.email", user)) {
+		return "", errors.New("Google Drive email not set for user")
+	}
 
-    email := viper.GetString(fmt.Sprintf("users.%s.google_drive.email", user))
+	email := viper.GetString(fmt.Sprintf("users.%s.google_drive.email", user))
 
-    storage.StoreFile(email, localFilePath, classification)
+	storage.StoreFile(email, localFilePath, classification)
 }

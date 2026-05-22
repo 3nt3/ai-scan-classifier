@@ -9,7 +9,8 @@ require (
 	github.com/lmittmann/tint v1.0.4
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/mymmrac/telego v0.30.2
-	github.com/sashabaranov/go-openai v1.17.8
+	github.com/sashabaranov/go-openai v1.41.2
+	github.com/spf13/viper v1.19.0
 	github.com/urfave/cli/v2 v2.27.2
 	golang.org/x/oauth2 v0.22.0
 	google.golang.org/api v0.194.0
@@ -55,7 +56,6 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/spf13/viper v1.19.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
