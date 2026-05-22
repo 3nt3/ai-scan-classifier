@@ -553,9 +553,9 @@ func processUserFolder(c *ftp.ServerConn, path string, user string, knownFiles m
 
 <b>%s</b>
 
-<blockquote><b>Category: %s</b></blockquote>
+<blockquote><p><b>Category: %s</b></p><p>%s</p></blockquote>
 
-You can download it from <a href="%s">%s</a>`, entry.Name, classification.Title, classification.Category, downloadURL, providerName))
+You can download it from <a href="%s">%s</a>`, entry.Name, classification.Title, classification.Category, classification.Explanation, downloadURL, providerName))
 			if err != nil {
 				slog.Error("Error sending Telegram message", "error", err)
 			}
