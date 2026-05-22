@@ -1,5 +1,5 @@
 services:
     classifier:
-        build: .
+        image: ghcr.io/3nt3/ai-scan-classifier
         container_name: ai-scan-classifier
         restart: always
